@@ -9,10 +9,9 @@ import "./ERC721Enumerable.sol";
 
 
 abstract contract JungleStorage {
-    uint256 public startingIndexBlock;
+    
     uint256 public tokenPrice = 0.0000094 ether; 
     uint256 public accumulationRate = 1.36986 ether;
-    uint256 public startingIndex;
     uint256 public emissionEnd = 86400 * 365 ;
     uint256 public tokensForPublic = 5000000 ether;
     uint256 public tokensForPublicAccrued=5000000 ether;
@@ -21,8 +20,8 @@ abstract contract JungleStorage {
     uint256 public SECONDS_IN_A_DAY = 86400;
     uint256 internal _totalSupply;
 
-    string internal _name;
-    string internal _symbol;
+    string internal _name = "JUNGLE";
+    string internal _symbol = "JUNGLE";
     address public cardAddress;
     uint8 internal _decimals;
    
