@@ -1,413 +1,284 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-
-import "./IERC20.sol";
 import "./SafeMath.sol";
-import "./Ownable.sol";
 import "./ERC721Enumerable.sol";
+import "./Ownable.sol";
+import "./EnumerableSet.sol";
 
+abstract contract  NftCardStorage { 
+    uint256 public constant SALE_START_TIMESTAMP = 1624527897;
+    uint256 public constant MAX_NFT_SUPPLY = 10000;
+    uint256 public  NAME_CHANGE_PRICE = 100 * (10 ** 18);
+    uint256 internal NFTPrice = 0.05 ether;
+    uint256 public  REVEAL_TIMESTAMP ;
+    string internal PROVENANCE = "";
+    uint256 public TOKENS_PER_NFT = 500 *1e18;
+    address public nctAddress;
+    uint256 firstGeneCount = 2500;
+    uint256 public MINTING_TIMESTAMP = block.timestamp + 90 days;
+    // Mapping from token ID to name
+    mapping (uint256 => string) internal _tokenName;
 
-
-abstract contract JungleStorage {
+    // Mapping if certain name string has already been reserved
+    mapping (string => bool) internal _nameReserved;
     
-    uint256 public tokenPrice = 0.0000094 ether; 
-    uint256 public accumulationRate = 1.36986 ether;
-    uint256 public emissionEnd = 86400 * 365 ;
-    uint256 public tokensForPublic = 5000000 ether;
-    uint256 public tokensForPublicAccrued=5000000 ether;
-    uint256 public tokensForTeams = 500000 ether;
-    uint256 public tokensForTeamsAfter365 =500000 ether;
-    uint256 public SECONDS_IN_A_DAY = 86400;
-    uint256 internal _totalSupply;
-
-    string internal _name = "JUNGLE";
-    string internal _symbol = "JUNGLE";
-    address public cardAddress;
-    uint8 internal _decimals;
-   
+    //Mapping to keep track of users that buy nft after reveal time
+    mapping (uint256 => uint256)public afterReveal;
     
-    mapping (address => uint256) internal _balances;
-    mapping (address => mapping (address => uint256)) internal _allowances;
-    mapping (uint256 => uint256) public _lastClaim;
-    mapping (uint256 => uint256) public emissionStart;
+    //Mapping to keep track of timestamp of token
+    mapping (uint256 => uint256)public tokenTimestamp;
     
+    //Mapping to keep track of breeding Price
+    mapping(uint256 => uint256)internal breedCount;
+    
+    //Mapping to keep track of breed Count
+    mapping(uint256 => uint256)internal breedPrice;
+    
+    //Mapping to store the parents of the breeds
+    mapping(uint256 => uint256[2])internal breedParents;
+    
+    //Mapping to specify which tokenId is bred
+    mapping(uint256 => bool)internal isBred;
 }
-contract JungleToken is IERC20,Ownable,JungleStorage {
+
+interface IJungleToken{
+    function mintForPublic(address to,uint mintQuantity, uint256 mintIndex) external returns(bool);
+    function burn(address recipient,uint256 burnQuantity) external returns (bool);
+
+}
+contract NFTcards is Ownable,ERC721Enumerable,NftCardStorage{
     using SafeMath for uint256;
-    
-    event claimedAmount(uint256 claimedAmount);
+    using Address for address;
+    using Strings for uint256;
+    using EnumerableSet for EnumerableSet.UintSet;
 
-    /**
-     * @dev Permissioning not added because it is only callable once.
-     */
-    function setNftCardAddress(address _cardAddress) onlyOwner public {
-        cardAddress = _cardAddress;
+    
+    constructor(address _nctAddress, uint256 _revealTimestamp) ERC721 ("Jungleverse",  "NC") {
+        nctAddress=_nctAddress;
+        REVEAL_TIMESTAMP = _revealTimestamp;
     }
 
-    
-    /**
-     * @dev When accumulated JungleTokens have last been claimed for a NFT index
-     */
-    function lastClaim(uint256 tokenIndex) public view returns (uint256) {
-        require(IERC721Enumerable(cardAddress).ownerOf(tokenIndex) != address(0), "Owner cannot be 0 address");
-        require(tokenIndex < IERC721Enumerable(cardAddress).totalSupply(), "NFT at index has not been minted yet");
-        uint256 lastClaimed = uint256(_lastClaim[tokenIndex]) != 0 ? uint256(_lastClaim[tokenIndex]) : emissionStart[tokenIndex];
-        return lastClaimed;
+    /*
+    *Function to withdraw ether from smart contract account , callable only by owner.
+    */
+    function withdraw() onlyOwner public {
+        uint balance = address(this).balance;
+        payable(msg.sender).transfer(balance);
     }
     
-    
-    
-    /**
-     * @dev Claim mints accumulated JungleTokens and supports multiple token indices at once.
-     */
-    function claim(uint256[] memory tokenIndices) public  returns (uint256) {
-        uint256 totalClaimQty = 0;
-        for (uint i = 0; i < tokenIndices.length; i++) {
-            // Sanity check for non-minted index
-            require(tokenIndices[i] < IERC721Enumerable(cardAddress).totalSupply(), "NFT at index has not been minted yet");
-            // Duplicate token index check
-            for (uint j = i + 1; j < tokenIndices.length; j++) {
-                require(tokenIndices[i] != tokenIndices[j], "Duplicate token index");
-            }
-            uint tokenIndex = tokenIndices[i];
-            require(IERC721Enumerable(cardAddress).ownerOf(tokenIndex) != address(0), "Owner cannot be 0 address");
+    /*
+    *Function mints NFT upto 20 number of NFTs.
+    */
+    function mintNFT(uint256 numberOfNfts) public payable {
+        require(totalSupply() < MAX_NFT_SUPPLY, "Sale has already ended");
+        require(numberOfNfts > 0, "numberOfNfts cannot be 0");
+        require(numberOfNfts <= 20, "You may not buy more than 20 NFTs at once");
+        require(totalSupply().add(numberOfNfts) <= MAX_NFT_SUPPLY, "Exceeds MAX_NFT_SUPPLY");
+        require(NFTPrice.mul(numberOfNfts) == msg.value, "Ether value sent is not correct");
 
-            uint256 lastClaimed = lastClaim(tokenIndex);
-            
-            require((block.timestamp -(emissionStart[tokenIndex]))>=SECONDS_IN_A_DAY,"Apply after one day to get accumulation amount for this/some token(s)!");
-            require(IERC721Enumerable(cardAddress).ownerOf(tokenIndex) == msg.sender, "Sender is not the owner");
-            uint256 accumulationPeriod = block.timestamp < emissionStart[tokenIndex].add(emissionEnd) ? block.timestamp : emissionStart[tokenIndex].add(emissionEnd); // Getting the min value of both
-
-            uint256 totalAccumulated = accumulationPeriod.sub(lastClaimed).mul(accumulationRate).div(SECONDS_IN_A_DAY);
-            emit claimedAmount(totalAccumulated);
-            if (totalAccumulated != 0) {
-                totalClaimQty = totalClaimQty.add(totalAccumulated);
-                _lastClaim[tokenIndex] = block.timestamp;
+        for (uint i = 0; i < numberOfNfts; i++) {
+            uint mintIndex = totalSupply();
+            _safeMint(msg.sender, mintIndex);
+             require(IJungleToken(nctAddress).mintForPublic(msg.sender,TOKENS_PER_NFT,mintIndex),"Error in transfer");
+             tokenTimestamp[mintIndex] = block.timestamp;
+         if(block.timestamp > REVEAL_TIMESTAMP)
+            {
+                afterReveal[mintIndex] = block.timestamp;
             }
-        }
-        require(totalClaimQty != 0, "No accumulated Jungle tokens");
-        mintAccumulationAmt(msg.sender, totalClaimQty); 
-        return totalClaimQty;
         }
         
-    
-    /*
-    *Mints accumulation amount when user calls claim(). to "to" address
-    */
-    function mintAccumulationAmt(address to,uint256 totalClaimQty) private{
-        _mint(to, totalClaimQty);
-        tokensForPublicAccrued-=totalClaimQty;
     }
     
-    /*
-    *Mints 500 tokens when user when user calls montNft for buying, Reduces supply by minted amount.
+    /**
+    @dev Method for changing price, only callable by owner.
     */
-    function mintForPublic(address to,uint256 amount, uint256 mintIndex) external returns(bool){
-        require(msg.sender==cardAddress,"You are not authorized to call this function!");
-        _mint(to,amount);
-        emissionStart[mintIndex] = block.timestamp;
-        tokensForPublic-=amount;
-        return true;
-    }
-
-     
-     /**
-     * @dev withdrawTokenForTeam sends 500000 token for team to owner address.
-     */
-     function withdrawTokenForTeam() onlyOwner external {
-         require(tokensForTeams!=0,"token for teams already claimed!");
-         _mint(msg.sender,tokensForTeams);
-         tokensForTeams=0;
-     }
-     
-     /**
-     * @dev withdrawTokenForTeamAfterYear sends 500000 jungle tokens to owner address after a year.
-     */
-     function withdrawTokenForTeamAfterYear() onlyOwner external{
-         require(block.timestamp>=emissionEnd,"You can't claim tokens before 1 year completes!");
-         require(tokensForTeamsAfter365!=0,"token for teams already claimed!");
-         _mint(msg.sender,tokensForTeamsAfter365);
-         tokensForTeamsAfter365=0;
-     }
-    /* 
-    *@dev Method for changing price of JungleToken, only callable by owner.
-    */
-    function changePrice(uint256 newPrice) external onlyOwner {
+    function changePrice(uint256 newPrice) public onlyOwner {
         require(newPrice> 0,"Price should be greater than zero!");
-        tokenPrice=newPrice;
+        NFTPrice=newPrice;
+    }
+
+    /**
+     * @dev Reserves the name if isReserve is set to true, de-reserves if set to false
+     */
+    function toggleReserveName(string memory str, bool isReserve) internal {
+        _nameReserved[toLower(str)] = isReserve;
+    }
+
+    /**
+     * @dev Returns name of the NFT at index.
+     */
+    function tokenNameByIndex(uint256 index) public view returns (string memory) {
+        return _tokenName[index];
+    }
+
+    /**
+     * @dev Returns if the name has been reserved.
+     */
+    function isNameReserved(string memory nameString) public view returns (bool) {
+        return _nameReserved[toLower(nameString)];
+    }
+
+    /**
+    @dev Add/Set's provenance. callable only by owner.
+    */
+    function changeProvenace(string memory _PROVENANCE) public onlyOwner{
+        PROVENANCE=_PROVENANCE;
+    }
+    /**
+    @dev Add/Set's minting timestamp. callable only by owner.
+    */
+    function changeMintTimeStamp(uint256 _timestamp) public onlyOwner{
+        MINTING_TIMESTAMP = _timestamp;
     }
     
-    /**
-     * @dev Returns the name of the token.
-     */
-    function name() public view returns (string memory) {
-        return _name;
+     /**
+    @dev Add/Set's name change price. callable only by owner.
+    */
+    function changeNamePrice(uint256 _price) public onlyOwner{
+        NAME_CHANGE_PRICE=_price;
     }
 
+    event NameChange (uint256 indexed NFTIndex, string newName);
     /**
-     * @dev Returns the symbol of the token, usually a shorter version of the
-     * name.
-     */
-    function symbol() public view returns (string memory) {
-        return _symbol;
-    }
+    @dev Change name for given "tokenId". only callable by "tokenId" owner.
+    */
+    function changeName(uint256 tokenId, string memory newName) public {
+        address owner = ownerOf(tokenId);
 
-    /**
-     * @dev Returns the number of decimals used to get its user representation.
-     * For example, if `decimals` equals `2`, a balance of `505` tokens should
-     * be displayed to a user as `5,05` (`505 / 10 ** 2`).
-     *
-     * Tokens usually opt for a value of 18, imitating the relationship between
-     * Ether and Wei. This is the value {ERC20} uses, unless {_setupDecimals} is
-     * called.
-     *
-     * NOTE: This information is only used for _display_ purposes: it in
-     * no way affects any of the arithmetic of the contract, including
-     * {IERC20-balanceOf} and {IERC20-transfer}.
-     */
-    function decimals() public view returns (uint8) {
-        return _decimals;
-    }
-
-    /**
-     * @dev See {IERC20-totalSupply}.
-     */
-    function totalSupply() public view override returns (uint256) {
-        return _totalSupply;
-    }
-
-    /**
-     * @dev See {IERC20-balanceOf}.
-     */
-    function balanceOf(address account) public view override returns (uint256) {
-        return _balances[account];
-    }
-    
-    /**
-     * @dev See {IERC20-transfer}.
-     *
-     * Requirements:
-     *
-     * - `recipient` cannot be the zero address.
-     * - the caller must have a balance of at least `amount`.
-     */
-    function transfer(address recipient, uint256 amount) public virtual override returns (bool) {
-        _transfer(_msgSender(), recipient, amount);
-        return true;
-    }
-
-    /**
-     * @dev See {IERC20-allowance}.
-     */
-    function allowance(address owner, address spender) public view virtual override returns (uint256) {
-        return _allowances[owner][spender];
-    }
-
-    /**
-     * @dev See {IERC20-approve}.
-     *
-     * Requirements:
-     *
-     * - `spender` cannot be the zero address.
-     */
-    function approve(address spender, uint256 amount) public virtual override returns (bool) {
-        _approve(_msgSender(), spender, amount);
-        return true;
-    }
-    /**
-     * @dev See {IERC20-transferFrom}.
-     *
-     * Emits an {Approval} event indicating the updated allowance. This is not
-     * required by the EIP. See the note at the beginning of {ERC20}.
-     *
-     * Requirements:
-     *
-     * - `sender` and `recipient` cannot be the zero address.
-     * - `sender` must have a balance of at least `amount`.
-     * - the caller must have allowance for ``sender``'s tokens of at least
-     * `amount`.
-     */
-    function transferFrom(address sender, address recipient, uint256 amount) public virtual override returns (bool) {
-        _transfer(sender, recipient, amount);
-        // Approval check is skipped if the caller of transferFrom is the NftCard contract. For better UX.
-        if (msg.sender != cardAddress) {
-            _approve(sender, _msgSender(), _allowances[sender][_msgSender()].sub(amount, "ERC20: transfer amount exceeds allowance"));
+        require(_msgSender() == owner, "ERC721: caller is not the owner");
+        require(validateName(newName) == true, "Not a valid new name");
+        require(sha256(bytes(newName)) != sha256(bytes(_tokenName[tokenId])), "New name is same as the current one");
+        require(isNameReserved(newName) == false, "Name already reserved");
+        
+       
+        // If already named, dereserve old name
+        if (bytes(_tokenName[tokenId]).length > 0) {
+            toggleReserveName(_tokenName[tokenId], false);
         }
-        return true;
-    }
-
-    /**
-     * @dev Atomically increases the allowance granted to `spender` by the caller.
-     *
-     * This is an alternative to {approve} that can be used as a mitigation for
-     * problems described in {IERC20-approve}.
-     *
-     * Emits an {Approval} event indicating the updated allowance.
-     *
-     * Requirements:
-     *
-     * - `spender` cannot be the zero address.
-     */
-    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
-        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].add(addedValue));
-        return true;
-    }
-
-
-
-    /**
-     * @dev Atomically decreases the allowance granted to `spender` by the caller.
-     *
-     * This is an alternative to {approve} that can be used as a mitigation for
-     * problems described in {IERC20-approve}.
-     *
-     * Emits an {Approval} event indicating the updated allowance.
-     *
-     * Requirements:
-     *
-     * - `spender` cannot be the zero address.
-     * - `spender` must have allowance for the caller of at least
-     * `subtractedValue`.
-     */
-    function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
-        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].sub(subtractedValue, "ERC20: decreased allowance below zero"));
-        return true;
-    }
-
-    /**
-     * @dev Moves tokens `amount` from `sender` to `recipient`.
-     *
-     * This is internal function is equivalent to {transfer}, and can be used to
-     * e.g. implement automatic token fees, slashing mechanisms, etc.
-     *
-     * Emits a {Transfer} event.
-     *
-     * Requirements:
-     *
-     * - `sender` cannot be the zero address.
-     * - `recipient` cannot be the zero address.
-     * - `sender` must have a balance of at least `amount`.
-     */
-    function _transfer(address sender, address recipient, uint256 amount) internal virtual {
-        require(sender != address(0), "ERC20: transfer from the zero address");
-        require(recipient != address(0), "ERC20: transfer to the zero address");
-
-        _beforeTokenTransfer(sender, recipient, amount);
-
-        _balances[sender] = _balances[sender].sub(amount, "ERC20: transfer amount exceeds balance");
-        _balances[recipient] = _balances[recipient].add(amount);
-        emit Transfer(sender, recipient, amount);
-    }
-    // ++
-    /**
-     * @dev Burns a quantity of tokens held by the caller.
-     *
-     * Emits an {Transfer} event to 0 address
-     *
-     */
-    function burn(address recipient,uint256 burnQuantity) public virtual  returns (bool) {
-         require(msg.sender==cardAddress,"You are not authorized to call this function!");
-        _burn(recipient, burnQuantity);
-        return true;
+        toggleReserveName(newName, true);
+        _tokenName[tokenId] = newName;
+        IJungleToken(nctAddress).burn(msg.sender,NAME_CHANGE_PRICE);
+        
+        emit NameChange(tokenId, newName);
     }
     
-    /** @dev Creates `mintQuantity` tokens and assigns them to `recipient`, increasing
-     * the total supply.
-     * Emits an {Transfer} event to 0 address
-     */
-    function mint(address recipient,uint256 mintQuantity) public virtual  returns (bool) {
-         require(msg.sender==cardAddress,"You are not authorized to call this function!");
-        _mint(recipient, mintQuantity);
+     function getTokenBreedPrice(uint256 _tokenId) internal  returns(uint){
+        uint breedCount = getBreedCount(_tokenId);
+        
+        if(breedCount == 0){
+           breedPrice[_tokenId] = 300 * 1e18; 
+        }
+        else if(breedCount == 1){
+             breedPrice[_tokenId] = 600 * 1e18; 
+        }
+        else if(breedCount == 2){
+             breedPrice[_tokenId] = 900 * 1e18; 
+        }
+        else if(breedCount == 3){
+             breedPrice[_tokenId] = 1200 * 1e18; 
+        } 
+        else{
+             breedPrice[_tokenId] = 1500 * 1e18; 
+        }
+        return breedPrice[_tokenId];
+    }
+    
+    function getBreedCount(uint256 _tokenId)internal view returns(uint256){
+        return(breedCount[_tokenId]);
+    }
+    
+       function breed(uint256 _Parent1, uint256 _Parent2) external returns(bool){
+         
+        address user = msg.sender;
+        uint256 mintIndex = totalSupply();
+        require(block.timestamp > MINTING_TIMESTAMP,"ERR_CANNOT_BREED");
+        uint256 existenceParent1 = getExistanceDaysofNFT(_Parent1);
+        uint256 existenceParent2 = getExistanceDaysofNFT(_Parent2);
+        require(_exists(_Parent1) && _exists(_Parent2) ,"ERR_TOKEN_DOESNOT_EXISTS");
+        require(user == ownerOf(_Parent1) && user == ownerOf(_Parent2),"ERR_NOT_AUTHORIZED");
+        require(existenceParent1 > 21 days && existenceParent2 > 21 days,"ERR_CANNOT_BREED");
+        uint256 _breedPrice1 =  getTokenBreedPrice(_Parent1);
+        uint256 _breedPrice2 =  getTokenBreedPrice(_Parent2);
+        uint256 _breedCountParent1 = getBreedCount(_Parent1);
+        uint256 _breedCountParent2 =  getBreedCount(_Parent2);
+        if(_Parent1 <= firstGeneCount){
+            require(_breedCountParent1 < 5 ,"ERR_YOU_CAN_ONLY_BREED_5_TIMES");
+        }else{
+            require(_breedCountParent1 < 10 ,"ERR_YOU_CAN_ONLY_BREED_10_TIMES");
+        }
+         if(_Parent2 <= firstGeneCount){
+            require(_breedCountParent2 < 5 ,"ERR_YOU_CAN_ONLY_BREED_5_TIMES");
+        }else{
+            require(_breedCountParent2 < 10 ,"ERR_YOU_CAN_ONLY_BREED_10_TIMES");
+        }
+         require(IJungleToken(nctAddress).burn(msg.sender,_breedPrice1.add(_breedPrice2)),"ERR_IN_TRANSFER");
+        _safeMint(user,mintIndex);
+        breedCount[_Parent1] = breedCount[_Parent1].add(1);
+        breedCount[_Parent2] = breedCount[_Parent2].add(1);
+        breedParents[mintIndex] =[_Parent1,_Parent2];
+        isBred[mintIndex] = true;
         return true;
     }
-    // ++
 
-    /** @dev Creates `amount` tokens and assigns them to `account`, increasing
-     * the total supply.
-     *
-     * Emits a {Transfer} event with `from` set to the zero address.
-     *
-     * Requirements:
-     *
-     * - `to` cannot be the zero address.
-     */
-    function _mint(address account, uint256 amount) internal virtual {
-        require(account != address(0), "ERC20: mint to the zero address");
-
-        _beforeTokenTransfer(address(0), account, amount);
-
-        _totalSupply = _totalSupply.add(amount);
-        _balances[account] = _balances[account].add(amount);
-        emit Transfer(address(0), account, amount);
-    }
-
-    /**
-     * @dev Destroys `amount` tokens from `account`, reducing the
-     * total supply.
-     *
-     * Emits a {Transfer} event with `to` set to the zero address.
-     *
-     * Requirements:
-     *
-     * - `account` cannot be the zero address.
-     * - `account` must have at least `amount` tokens.
-     */
-    function _burn(address account, uint256 amount) internal virtual {
-        require(account != address(0), "ERC20: burn from the zero address");
-
-        _beforeTokenTransfer(account, address(0), amount);
-
-        _balances[account] = _balances[account].sub(amount, "ERC20: burn amount exceeds balance");
-        _totalSupply = _totalSupply.sub(amount);
-        emit Transfer(account, address(0), amount);
-    }
-
-    /**
-     * @dev Sets `amount` as the allowance of `spender` over the `owner` s tokens.
-     *
-     * This internal function is equivalent to `approve`, and can be used to
-     * e.g. set automatic allowances for certain subsystems, etc.
-     *
-     * Emits an {Approval} event.
-     *
-     * Requirements:
-     *
-     * - `owner` cannot be the zero address.
-     * - `spender` cannot be the zero address.
-     */
-    function _approve(address owner, address spender, uint256 amount) internal virtual {
-        require(owner != address(0), "ERC20: approve from the zero address");
-        require(spender != address(0), "ERC20: approve to the zero address");
-
-        _allowances[owner][spender] = amount;
-        emit Approval(owner, spender, amount);
-    }
-
-    /**
-     * @dev Sets {decimals} to a value other than the default one of 18.
-     *
-     * WARNING: This function should only be called from the constructor. Most
-     * applications that interact with token contracts will not expect
-     * {decimals} to ever change, and may work incorrectly if it does.
-     */
-    function _setupDecimals(uint8 decimals_) internal {
-        _decimals = decimals_;
-    }
-
-    /**
-     * @dev Hook that is called before any transfer of tokens. This includes
-     * minting and burning.
-     *
-     * Calling conditions:
-     *
-     * - when `from` and `to` are both non-zero, `amount` of ``from``'s tokens
-     * will be to transferred to `to`.
-     * - when `from` is zero, `amount` tokens will be minted for `to`.
-     * - when `to` is zero, `amount` of ``from``'s tokens will be burned.
-     * - `from` and `to` are never both zero.
-     *
-     * To learn more about hooks, head to xref:ROOT:extending-contracts.adoc#using-hooks[Using Hooks].
-     */
-    function _beforeTokenTransfer(address from, address to, uint256 amount) internal virtual { }   
+     function getExistanceDaysofNFT(uint _tokenId) internal view returns(uint256){
+         if(!_exists(_tokenId)) return 0;
+         uint256 timestamp = tokenTimestamp[_tokenId];
+         uint256 Days = ((block.timestamp.sub(timestamp)));
+         return Days;
+     }
+     
+     function getBeedParents(uint256 _tokenId) external view returns(uint256[2] memory){
+         require(isBred[_tokenId],"The character is not bred");
+         return breedParents[_tokenId];
+     }
     
+    /**
+    @dev Validate token name provided by caller.
+    */
+        function validateName(string memory str) public pure returns (bool){
+        bytes memory b = bytes(str);
+        if(b.length < 1) return false;
+        if(b.length > 25) return false; // Cannot be longer than 25 characters
+        if(b[0] == 0x20) return false; // Leading space
+        if (b[b.length - 1] == 0x20) return false; // Trailing space
+
+        bytes1 lastChar = b[0];
+
+        for(uint i; i<b.length; i++){
+            bytes1 char = b[i];
+
+            if (char == 0x20 && lastChar == 0x20) return false; // Cannot contain continous spaces
+            if (char == 0x61 && char <= 0x7A) return false; // Cannot contain continous a-z as first letter
+
+            if(
+                //!(char >= 0x30 && char <= 0x39) && //9-0
+                !(char >= 0x41 && char <= 0x5A) && //A-Z
+                !(char >= 0x61 && char <= 0x7A) && //a-z
+                !(char == 0x20) //space
+            )
+                return false;
+
+            lastChar = char;
+        }
+
+        return true;
+    }
+    /**
+    @dev Converts "str" to lowercase.
+    */
+    function toLower(string memory str) public pure returns (string memory){
+        bytes memory bStr = bytes(str);
+        bytes memory bLower = new bytes(bStr.length);
+        for (uint i = 0; i < bStr.length; i++) {
+            // Uppercase character
+            if ((uint8(bStr[i]) >= 65) && (uint8(bStr[i]) <= 90)) {
+                bLower[i] = bytes1(uint8(bStr[i]) + 32);
+            } else {
+                bLower[i] = bStr[i];
+            }
+        }
+        return string(bLower);
+    }
+    
+
 }
