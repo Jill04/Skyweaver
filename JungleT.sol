@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity 0.8.0;
 
-import "./IERC20.sol";
-import "./SafeMath.sol";
-import "./Ownable.sol";
-import "./ERC721Enumerable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
+ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
+import "./EternalStorageProxy.sol";
 
 abstract contract JungleStorage {
-    
+    uint256 public startingIndexBlock;
     uint256 public tokenPrice = 0.0000094 ether; 
     uint256 public accumulationRate = 1.36986 ether;
+    uint256 public startingIndex;
     uint256 public emissionEnd = 86400 * 365 ;
     uint256 public tokensForPublic = 5000000 ether;
     uint256 public tokensForPublicAccrued=5000000 ether;
@@ -20,11 +22,12 @@ abstract contract JungleStorage {
     uint256 public SECONDS_IN_A_DAY = 86400;
     uint256 internal _totalSupply;
 
-    string internal _name = "JUNGLE";
-    string internal _symbol = "JUNGLE";
+    string internal _name;
+    string internal _symbol;
     address public cardAddress;
     uint8 internal _decimals;
    
+    address _admin;
     
     mapping (address => uint256) internal _balances;
     mapping (address => mapping (address => uint256)) internal _allowances;
@@ -32,18 +35,32 @@ abstract contract JungleStorage {
     mapping (uint256 => uint256) public emissionStart;
     
 }
-contract JungleToken is IERC20,Ownable,JungleStorage {
+
+contract JungleToken is IERC20,JungleStorage, EternalStorageProxy,Initializable {
     using SafeMath for uint256;
+    
+    // /**
+    //  * @dev Throws if called by any account other than the owner.
+    //  */
+    // modifier onlyOwnerModifier() {
+    //     address owner=owner();
+    //     require(tx.origin == owner, "JungleToken : caller is not the owner");
+    //     _;
+    // }
     
     event claimedAmount(uint256 claimedAmount);
 
     /**
      * @dev Permissioning not added because it is only callable once.
      */
-    function setNftCardAddress(address _cardAddress) onlyOwner public {
+    function setNftCardAddress(address _cardAddress)   public {
+        require( msg.sender== _admin,"ERR_NOT_AUTHORIZED");
         cardAddress = _cardAddress;
     }
-
+     
+     function initialize(address admin) public initializer {
+        _admin = admin;
+    }
     
     /**
      * @dev When accumulated JungleTokens have last been claimed for a NFT index
@@ -75,7 +92,7 @@ contract JungleToken is IERC20,Ownable,JungleStorage {
             uint256 lastClaimed = lastClaim(tokenIndex);
             
             require((block.timestamp -(emissionStart[tokenIndex]))>=SECONDS_IN_A_DAY,"Apply after one day to get accumulation amount for this/some token(s)!");
-            require(IERC721Enumerable(cardAddress).ownerOf(tokenIndex) == msg.sender, "Sender is not the owner");
+            require(IERC721Enumerable(cardAddress).ownerOf(tokenIndex) == tx.origin, "Sender is not the owner");
             uint256 accumulationPeriod = block.timestamp < emissionStart[tokenIndex].add(emissionEnd) ? block.timestamp : emissionStart[tokenIndex].add(emissionEnd); // Getting the min value of both
 
             uint256 totalAccumulated = accumulationPeriod.sub(lastClaimed).mul(accumulationRate).div(SECONDS_IN_A_DAY);
@@ -86,7 +103,7 @@ contract JungleToken is IERC20,Ownable,JungleStorage {
             }
         }
         require(totalClaimQty != 0, "No accumulated Jungle tokens");
-        mintAccumulationAmt(msg.sender, totalClaimQty); 
+        mintAccumulationAmt(tx.origin, totalClaimQty); 
         return totalClaimQty;
         }
         
@@ -114,25 +131,28 @@ contract JungleToken is IERC20,Ownable,JungleStorage {
      /**
      * @dev withdrawTokenForTeam sends 500000 token for team to owner address.
      */
-     function withdrawTokenForTeam() onlyOwner external {
+     function withdrawTokenForTeam() external {
+         require( msg.sender== _admin,"ERR_NOT_AUTHORIZED");
          require(tokensForTeams!=0,"token for teams already claimed!");
-         _mint(msg.sender,tokensForTeams);
+         _mint(_admin,tokensForTeams);
          tokensForTeams=0;
      }
      
      /**
      * @dev withdrawTokenForTeamAfterYear sends 500000 jungle tokens to owner address after a year.
      */
-     function withdrawTokenForTeamAfterYear() onlyOwner external{
+     function withdrawTokenForTeamAfterYear()  external {
+         require( msg.sender== _admin,"ERR_NOT_AUTHORIZED");
          require(block.timestamp>=emissionEnd,"You can't claim tokens before 1 year completes!");
          require(tokensForTeamsAfter365!=0,"token for teams already claimed!");
-         _mint(msg.sender,tokensForTeamsAfter365);
+         _mint(_admin,tokensForTeamsAfter365);
          tokensForTeamsAfter365=0;
      }
     /* 
     *@dev Method for changing price of JungleToken, only callable by owner.
     */
-    function changePrice(uint256 newPrice) external onlyOwner {
+    function changePrice(uint256 newPrice) external  {
+        require( msg.sender== _admin,"ERR_NOT_AUTHORIZED");
         require(newPrice> 0,"Price should be greater than zero!");
         tokenPrice=newPrice;
     }
@@ -155,13 +175,13 @@ contract JungleToken is IERC20,Ownable,JungleStorage {
     /**
      * @dev Returns the number of decimals used to get its user representation.
      * For example, if `decimals` equals `2`, a balance of `505` tokens should
-     * be displayed to a user as `5,05` (`505 / 10 ** 2`).
+      be displayed to a user as `5,05` (`505 / 10 * 2`).
      *
      * Tokens usually opt for a value of 18, imitating the relationship between
      * Ether and Wei. This is the value {ERC20} uses, unless {_setupDecimals} is
      * called.
      *
-     * NOTE: This information is only used for _display_ purposes: it in
+     * NOTE: This information is only used for display purposes: it in
      * no way affects any of the arithmetic of the contract, including
      * {IERC20-balanceOf} and {IERC20-transfer}.
      */
@@ -192,7 +212,7 @@ contract JungleToken is IERC20,Ownable,JungleStorage {
      * - the caller must have a balance of at least `amount`.
      */
     function transfer(address recipient, uint256 amount) public virtual override returns (bool) {
-        _transfer(_msgSender(), recipient, amount);
+        _transfer(msg.sender, recipient, amount);
         return true;
     }
 
@@ -211,7 +231,7 @@ contract JungleToken is IERC20,Ownable,JungleStorage {
      * - `spender` cannot be the zero address.
      */
     function approve(address spender, uint256 amount) public virtual override returns (bool) {
-        _approve(_msgSender(), spender, amount);
+        _approve(msg.sender, spender, amount);
         return true;
     }
     /**
@@ -231,7 +251,7 @@ contract JungleToken is IERC20,Ownable,JungleStorage {
         _transfer(sender, recipient, amount);
         // Approval check is skipped if the caller of transferFrom is the NftCard contract. For better UX.
         if (msg.sender != cardAddress) {
-            _approve(sender, _msgSender(), _allowances[sender][_msgSender()].sub(amount, "ERC20: transfer amount exceeds allowance"));
+            _approve(sender, msg.sender, _allowances[sender][msg.sender].sub(amount, "ERC20: transfer amount exceeds allowance"));
         }
         return true;
     }
@@ -249,7 +269,7 @@ contract JungleToken is IERC20,Ownable,JungleStorage {
      * - `spender` cannot be the zero address.
      */
     function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
-        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].add(addedValue));
+        _approve(msg.sender, spender, _allowances[msg.sender][spender].add(addedValue));
         return true;
     }
 
@@ -270,7 +290,7 @@ contract JungleToken is IERC20,Ownable,JungleStorage {
      * `subtractedValue`.
      */
     function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
-        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].sub(subtractedValue, "ERC20: decreased allowance below zero"));
+        _approve(msg.sender, spender, _allowances[msg.sender][spender].sub(subtractedValue, "ERC20: decreased allowance below zero"));
         return true;
     }
 
@@ -390,7 +410,7 @@ contract JungleToken is IERC20,Ownable,JungleStorage {
      * applications that interact with token contracts will not expect
      * {decimals} to ever change, and may work incorrectly if it does.
      */
-    function _setupDecimals(uint8 decimals_) internal {
+    function setupDecimals(uint8 decimals_) internal {
         _decimals = decimals_;
     }
 
