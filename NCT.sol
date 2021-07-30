@@ -1,21 +1,37 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-import "./SafeMath.sol";
-import "./ERC721Enumerable.sol";
-import "./Ownable.sol";
-import "./EnumerableSet.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+//import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "./EternalStorageProxy.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721EnumerableUpgradeable.sol";
 
-abstract contract  NftCardStorage { 
-    uint256 public constant SALE_START_TIMESTAMP = 1624527897;
-    uint256 public constant MAX_NFT_SUPPLY = 10000;
-    uint256 public  NAME_CHANGE_PRICE = 100 * (10 ** 18);
-    uint256 internal NFTPrice = 0.05 ether;
+
+interface IJungleToken{
+    function mintForPublic(address to,uint mintQuantity, uint256 mintIndex) external returns(bool);
+    function burn(address recipient,uint256 burnQuantity) external returns (bool);
+
+}
+contract NFTCards is Initializable,ERC721EnumerableUpgradeable{
+    using SafeMath for uint256;
+    using Address for address;
+    using Strings for uint256;
+    uint256 public startingIndexBlock;
+    uint256 public  SALE_START_TIMESTAMP ;
+    uint256 public  MAX_NFT_SUPPLY ;
+    uint256 public  NAME_CHANGE_PRICE ;
+    uint256 public NFTPrice ;
     uint256 public  REVEAL_TIMESTAMP ;
-    string internal PROVENANCE = "";
-    uint256 public TOKENS_PER_NFT = 500 *1e18;
+    string internal PROVENANCE ;
+    uint256 public TOKENS_PER_NFT ;
     address public nctAddress;
-    uint256 firstGeneCount = 2500;
-    uint256 public MINTING_TIMESTAMP = block.timestamp + 90 days;
+    uint public startingIndex;
+
+    address _admin;
+    
     // Mapping from token ID to name
     mapping (uint256 => string) internal _tokenName;
 
@@ -39,32 +55,41 @@ abstract contract  NftCardStorage {
     
     //Mapping to specify which tokenId is bred
     mapping(uint256 => bool)internal isBred;
-}
-
-interface IJungleToken{
-    function mintForPublic(address to,uint mintQuantity, uint256 mintIndex) external returns(bool);
-    function burn(address recipient,uint256 burnQuantity) external returns (bool);
-
-}
-contract NFTcards is Ownable,ERC721Enumerable,NftCardStorage{
-    using SafeMath for uint256;
-    using Address for address;
-    using Strings for uint256;
     using EnumerableSet for EnumerableSet.UintSet;
 
     
-    constructor(address _nctAddress, uint256 _revealTimestamp) ERC721 ("Jungleverse",  "NC") {
-        nctAddress=_nctAddress;
+
+
+   function initialize(address admin, address _nctAddress, uint _revealTimestamp) public initializer {
+        _admin = admin;
+        __ERC721_init("MyCollectible", "MCO");
+         nctAddress=_nctAddress;
         REVEAL_TIMESTAMP = _revealTimestamp;
+         SALE_START_TIMESTAMP = 1624527897;
+        MAX_NFT_SUPPLY = 10000;
+        NAME_CHANGE_PRICE = 350 * (10 ** 18);
+        NFTPrice = 0.08 ether;
+        REVEAL_TIMESTAMP ;
+        PROVENANCE = "";
+        TOKENS_PER_NFT = 500 *1e18;
+    }
+    
+    /**
+     * @dev Throws if called by any account other than the owner.
+     */
+    modifier onlyOwnerModifier() {
+        address owner= _admin;
+        require(tx.origin == owner, "caller is not the owner");
+        _;
     }
 
     /*
     *Function to withdraw ether from smart contract account , callable only by owner.
     */
-    function withdraw() onlyOwner public {
-        uint balance = address(this).balance;
-        payable(msg.sender).transfer(balance);
-    }
+    // function withdraw() onlyOwnerModifier public {
+    //     uint balance = address(this).balance;
+    //     (msg.sender).transfer(balance);
+    // }
     
     /*
     *Function mints NFT upto 20 number of NFTs.
@@ -78,8 +103,8 @@ contract NFTcards is Ownable,ERC721Enumerable,NftCardStorage{
 
         for (uint i = 0; i < numberOfNfts; i++) {
             uint mintIndex = totalSupply();
-            _safeMint(msg.sender, mintIndex);
-             require(IJungleToken(nctAddress).mintForPublic(msg.sender,TOKENS_PER_NFT,mintIndex),"Error in transfer");
+            _safeMint(tx.origin, mintIndex);
+             require(IJungleToken(nctAddress).mintForPublic(tx.origin,TOKENS_PER_NFT,mintIndex),"Error in transfer");
              tokenTimestamp[mintIndex] = block.timestamp;
          if(block.timestamp > REVEAL_TIMESTAMP)
             {
@@ -92,7 +117,7 @@ contract NFTcards is Ownable,ERC721Enumerable,NftCardStorage{
     /**
     @dev Method for changing price, only callable by owner.
     */
-    function changePrice(uint256 newPrice) public onlyOwner {
+    function changePrice(uint256 newPrice) public onlyOwnerModifier {
         require(newPrice> 0,"Price should be greater than zero!");
         NFTPrice=newPrice;
     }
@@ -121,20 +146,14 @@ contract NFTcards is Ownable,ERC721Enumerable,NftCardStorage{
     /**
     @dev Add/Set's provenance. callable only by owner.
     */
-    function changeProvenace(string memory _PROVENANCE) public onlyOwner{
+    function changeProvenace(string memory _PROVENANCE) public onlyOwnerModifier{
         PROVENANCE=_PROVENANCE;
-    }
-    /**
-    @dev Add/Set's minting timestamp. callable only by owner.
-    */
-    function changeMintTimeStamp(uint256 _timestamp) public onlyOwner{
-        MINTING_TIMESTAMP = _timestamp;
     }
     
      /**
     @dev Add/Set's name change price. callable only by owner.
     */
-    function changeNamePrice(uint256 _price) public onlyOwner{
+    function changeNamePrice(uint256 _price) public onlyOwnerModifier{
         NAME_CHANGE_PRICE=_price;
     }
 
@@ -191,30 +210,17 @@ contract NFTcards is Ownable,ERC721Enumerable,NftCardStorage{
          
         address user = msg.sender;
         uint256 mintIndex = totalSupply();
-        require(block.timestamp > MINTING_TIMESTAMP,"ERR_CANNOT_BREED");
         uint256 existenceParent1 = getExistanceDaysofNFT(_Parent1);
         uint256 existenceParent2 = getExistanceDaysofNFT(_Parent2);
         require(_exists(_Parent1) && _exists(_Parent2) ,"ERR_TOKEN_DOESNOT_EXISTS");
         require(user == ownerOf(_Parent1) && user == ownerOf(_Parent2),"ERR_NOT_AUTHORIZED");
-        require(existenceParent1 > 21 days && existenceParent2 > 21 days,"ERR_CANNOT_BREED");
+       // require(existence > 21 days,"ERR_CANNOT_BREED");
         uint256 _breedPrice1 =  getTokenBreedPrice(_Parent1);
         uint256 _breedPrice2 =  getTokenBreedPrice(_Parent2);
-        uint256 _breedCountParent1 = getBreedCount(_Parent1);
-        uint256 _breedCountParent2 =  getBreedCount(_Parent2);
-        if(_Parent1 <= firstGeneCount){
-            require(_breedCountParent1 < 5 ,"ERR_YOU_CAN_ONLY_BREED_5_TIMES");
-        }else{
-            require(_breedCountParent1 < 10 ,"ERR_YOU_CAN_ONLY_BREED_10_TIMES");
-        }
-         if(_Parent2 <= firstGeneCount){
-            require(_breedCountParent2 < 5 ,"ERR_YOU_CAN_ONLY_BREED_5_TIMES");
-        }else{
-            require(_breedCountParent2 < 10 ,"ERR_YOU_CAN_ONLY_BREED_10_TIMES");
-        }
-         require(IJungleToken(nctAddress).burn(msg.sender,_breedPrice1.add(_breedPrice2)),"ERR_IN_TRANSFER");
         _safeMint(user,mintIndex);
         breedCount[_Parent1] = breedCount[_Parent1].add(1);
-        breedCount[_Parent2] = breedCount[_Parent2].add(1);
+         breedCount[_Parent2] = breedCount[_Parent2].add(1);
+        require(IJungleToken(nctAddress).burn(msg.sender,_breedPrice1.add(_breedPrice2)),"ERR_IN_TRANSFER");
         breedParents[mintIndex] =[_Parent1,_Parent2];
         isBred[mintIndex] = true;
         return true;
@@ -248,10 +254,9 @@ contract NFTcards is Ownable,ERC721Enumerable,NftCardStorage{
             bytes1 char = b[i];
 
             if (char == 0x20 && lastChar == 0x20) return false; // Cannot contain continous spaces
-            if (char == 0x61 && char <= 0x7A) return false; // Cannot contain continous a-z as first letter
 
             if(
-                //!(char >= 0x30 && char <= 0x39) && //9-0
+                !(char >= 0x30 && char <= 0x39) && //9-0
                 !(char >= 0x41 && char <= 0x5A) && //A-Z
                 !(char >= 0x61 && char <= 0x7A) && //a-z
                 !(char == 0x20) //space
