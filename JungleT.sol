@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.0;
+pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
@@ -9,7 +9,9 @@ import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 
 import "./EternalStorageProxy.sol";
 
-abstract contract JungleStorage {
+
+contract JungleToken is IERC20, EternalStorageProxy,Initializable {
+    using SafeMath for uint256;
     uint256 public startingIndexBlock;
     uint256 public tokenPrice = 0.0000094 ether; 
     uint256 public accumulationRate = 1.36986 ether;
@@ -33,33 +35,36 @@ abstract contract JungleStorage {
     mapping (address => mapping (address => uint256)) internal _allowances;
     mapping (uint256 => uint256) public _lastClaim;
     mapping (uint256 => uint256) public emissionStart;
-    
-}
-
-contract JungleToken is IERC20,JungleStorage, EternalStorageProxy,Initializable {
-    using SafeMath for uint256;
-    
-    // /**
-    //  * @dev Throws if called by any account other than the owner.
-    //  */
-    // modifier onlyOwnerModifier() {
-    //     address owner=owner();
-    //     require(tx.origin == owner, "JungleToken : caller is not the owner");
-    //     _;
-    // }
+    /**
+     * @dev Throws if called by any account other than the owner.
+     */
+    modifier onlyOwnerModifier() {
+        address owner=_admin;
+        require(tx.origin == owner, "JungleToken : caller is not the owner");
+        _;
+    }
     
     event claimedAmount(uint256 claimedAmount);
 
     /**
      * @dev Permissioning not added because it is only callable once.
      */
-    function setNftCardAddress(address _cardAddress)   public {
-        require( msg.sender== _admin,"ERR_NOT_AUTHORIZED");
+    function setNftCardAddress(address _cardAddress) onlyOwnerModifier  public {
         cardAddress = _cardAddress;
     }
      
      function initialize(address admin) public initializer {
         _admin = admin;
+        tokenPrice = 0.0000094 ether; 
+        accumulationRate = 1.36986 ether;
+        startingIndex;
+        emissionEnd = 86400 * 365 ;
+        tokensForPublic = 5000000 ether;
+        tokensForPublicAccrued=5000000 ether;
+        tokensForTeams = 500000 ether;
+        tokensForTeamsAfter365 =500000 ether;
+        SECONDS_IN_A_DAY = 86400;
+        _totalSupply;
     }
     
     /**
